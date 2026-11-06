@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<title>Резервная касса</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<style>
+:root{--bg:#f3f5f7;--card:#fff;--ink:#1b2430;--muted:#6b7785;--brand:#0f766e;--brand-d:#0b5a54;--danger:#c62828;--warn:#8a4b00;--warn-bg:#fff4d6;--ok-bg:#e6f4ea;--line:#dfe5ea}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:16px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;overscroll-behavior:contain}
+#app{height:100dvh;display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--brand);color:#fff;min-height:48px}
+header h1{font-size:18px;margin:0;flex:1}
+.chip{font-size:12px;background:rgba(255,255,255,.18);border-radius:12px;padding:3px 9px;white-space:nowrap}
+.chip.warn{background:#ffd54f;color:#4a3300}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#9ad;margin-right:5px}
+.dot.on{background:#7be37b}.dot.off{background:#ff8a80}
+.ibtn{background:rgba(255,255,255,.16);border:0;color:#fff;font-size:20px;width:40px;height:40px;border-radius:10px}
+main{flex:1;min-height:0;position:relative}
+.tab{display:none;position:absolute;inset:0;flex-direction:column}
+.tab.active{display:flex}
+nav{display:flex;background:#fff;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;background:none;padding:9px 4px 8px;font-size:13px;color:var(--muted);position:relative}
+nav button b{display:block;font-size:20px;line-height:1.1}
+nav button.active{color:var(--brand);font-weight:700}
+.badge{position:absolute;top:3px;left:calc(50% + 8px);background:var(--danger);color:#fff;border-radius:10px;font-size:11px;padding:1px 6px;min-width:18px}
+/* касса */
+#camWrap{position:relative;background:#000;height:23vh;min-height:140px;max-height:230px;flex:none;overflow:hidden}
+#reader{width:100%;height:100%}
+#reader video{width:100%!important;height:100%!important;object-fit:cover}
+#camMsg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cfd8dc;padding:12px;font-size:14px}
+#camMsg:empty{display:none}
+#camTools{position:absolute;right:8px;bottom:8px;display:flex;gap:8px;z-index:3}
+#camTools button{background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:10px;height:40px;min-width:44px;font-size:18px}
+#camTools button.on{background:#ffd54f;color:#000}
+#camWrap.hit{box-shadow:inset 0 0 0 4px #4caf50}
+.searchRow{position:relative;padding:8px 10px;background:#fff;border-bottom:1px solid var(--line);flex:none}
+#q{width:100%;height:48px;font-size:17px;padding:0 44px 0 12px;border:2px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+#q:focus{outline:none;border-color:var(--brand)}
+#qClear{position:absolute;right:16px;top:14px;border:0;background:none;font-size:22px;color:var(--muted);width:36px;height:36px;display:none}
+#suggest{position:absolute;left:10px;right:10px;top:58px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.2);max-height:40vh;overflow:auto;z-index:30;display:none}
+#suggest .it{padding:10px 12px;border-bottom:1px solid var(--line)}
+#suggest .it:last-child{border-bottom:0}
+#suggest .it:active{background:#e0f2f1}
+.it .n{font-weight:600}.it .m{font-size:13px;color:var(--muted)}
+#cart{flex:1;min-height:0;overflow-y:auto;padding:8px 10px}
+.empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:15px}
+.line{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 10px;margin-bottom:8px}
+.line .top{display:flex;gap:8px;align-items:flex-start}
+.line .nm{flex:1;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.line .rm{border:0;background:none;color:var(--muted);font-size:22px;width:34px;height:34px;margin:-6px -6px 0 0}
+.tag{display:inline-block;font-size:11px;border-radius:6px;padding:1px 6px;margin-left:4px;background:var(--warn-bg);color:var(--warn);font-weight:600}
+.line .row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.price{border:1px dashed #b8c2cc;background:#fafbfc;border-radius:8px;padding:6px 9px;font-size:15px;min-width:74px;text-align:center;color:var(--ink)}
+.price.changed{border-color:#e0a800;background:var(--warn-bg)}
+.price.none{border-color:var(--danger);color:var(--danger);font-weight:700}
+.qty{display:flex;align-items:center;gap:4px;margin-left:auto}
+.qty button{width:44px;height:44px;border-radius:10px;border:1px solid #b8c2cc;background:#fff;font-size:24px;line-height:1;color:var(--ink)}
+.qty button:disabled{opacity:.35}
+.qty input,.wbox input{width:62px;height:44px;text-align:center;font-size:18px;font-weight:700;border:2px solid var(--line);border-radius:10px;color:var(--ink);background:#fff}
+.lsum{min-width:78px;text-align:right;font-weight:700}
+.wbox{display:flex;gap:8px;margin-top:6px;align-items:flex-end}
+.wbox label{flex:1;font-size:12px;color:var(--muted)}
+.wbox input{width:100%;margin-top:2px}
+.foot{flex:none;background:#fff;border-top:1px solid var(--line);padding:8px 12px 10px}
+.totalRow{display:flex;align-items:baseline;justify-content:space-between}
+.totalRow span{color:var(--muted);font-size:14px}
+#total{font-size:36px;font-weight:800;letter-spacing:-.5px}
+.btns{display:flex;gap:8px;margin-top:6px}
+.btn{height:54px;border-radius:12px;border:0;font-size:17px;font-weight:700;padding:0 16px}
+.btn.primary{flex:1;background:var(--brand);color:#fff;font-size:20px;font-weight:800}
+.btn.primary:disabled{background:#9db8b5}
+.btn.sec{background:#eef1f4;color:var(--ink)}
+.btn.danger{background:var(--danger);color:#fff}
+.btn.small{height:40px;font-size:14px;padding:0 12px}
+/* сессия / история */
+.pane{flex:1;overflow-y:auto;padding:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+.card h3{margin:0 0 6px;font-size:16px}
+.muted{color:var(--muted);font-size:14px}
+.banner{border-radius:12px;padding:10px 12px;margin-bottom:10px;font-size:14px}
+.banner.warn{background:var(--warn-bg);color:var(--warn)}
+.banner.ok{background:var(--ok-bg);color:#1b5e20}
+.seg{display:flex;background:#e3e8ec;border-radius:10px;padding:3px;margin-bottom:10px}
+.seg button{flex:1;border:0;background:none;padding:9px 4px;border-radius:8px;font-size:14px;color:var(--muted)}
+.seg button.active{background:#fff;color:var(--ink);font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+table.sum{width:100%;border-collapse:collapse;font-size:14px}
+table.sum td{padding:8px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+table.sum td:nth-child(2){text-align:right;white-space:nowrap}
+table.sum td:nth-child(3){text-align:right;white-space:nowrap;font-weight:700}
+table.sum tr.tot td{border-bottom:0;font-size:17px;font-weight:800;padding-top:12px}
+.sale .hd{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.sale .hd b{font-size:16px}
+.sale.cancelled{opacity:.55}.sale.cancelled .hd b{text-decoration:line-through}
+.sale ul{margin:8px 0 0;padding:0;list-style:none;font-size:14px}
+.sale li{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-top:1px dashed var(--line)}
+.sale li span:first-child{flex:1}
+.hist{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:8px;font-size:15px;color:var(--ink)}
+/* оверлеи */
+#toast{position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + 56px);background:#263238;box-shadow:0 6px 20px rgba(0,0,0,.35);color:#fff;border-radius:12px;padding:12px 14px;display:none;z-index:60;align-items:center;gap:10px;font-size:15px}
+#toast.show{display:flex}#toast span{flex:1}
+#toast button{background:none;border:0;color:#80cbc4;font-weight:800;font-size:15px;padding:6px}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:flex-end;justify-content:center;z-index:50}
+.ov.show{display:flex}
+.sheet{background:#fff;width:100%;max-width:560px;border-radius:18px 18px 0 0;padding:16px;max-height:92dvh;overflow-y:auto}
+.sheet h2{margin:0 0 10px;font-size:19px}
+.sheet label{display:block;font-size:13px;color:var(--muted);margin:10px 0 3px}
+.sheet input[type=text],.sheet input[type=number],.sheet input:not([type]){width:100%;height:46px;font-size:17px;border:2px solid var(--line);border-radius:10px;padding:0 10px}
+.sheet .btns{margin-top:14px}
+.sheet .btns .btn{flex:1;height:50px;font-size:16px;padding:0 10px}
+.sheet .btns .btn.primary{font-size:16px}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:14px}
+.kv span:last-child{text-align:right;font-weight:600}
+.pick{display:block;width:100%;text-align:left;background:#f3f5f7;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:8px;color:var(--ink);font-size:16px}
+.pick:active{background:#e0f2f1}
+.pick .n{display:block;font-weight:700}.pick .m{display:block;font-size:14px;color:var(--muted);margin-top:2px}
+a.btn.lnk{display:flex;align-items:center;justify-content:center;text-align:center;text-decoration:none;font-size:15px;height:auto;min-height:50px;padding:8px 12px}
+.xbtn{border:0;background:#eef1f4;color:var(--danger);width:36px;height:36px;border-radius:10px;font-size:18px;flex:none}
+pre.rep{white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace;background:#f3f5f7;border-radius:8px;padding:8px;max-height:30vh;overflow:auto}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Резервная касса</h1>
+    <span class="chip" id="priceChip">прайс…</span>
+    <button class="ibtn" id="btnSettings" aria-label="Настройки">⚙</button>
+  </header>
+  <main>
+    <section class="tab active" id="tab-kassa">
+      <div id="camWrap">
+        <div id="reader"></div>
+        <div id="camMsg">Запуск камеры…</div>
+        <div id="camTools"><button id="btnTorch" style="display:none" aria-label="Фонарик">🔦</button><button id="btnCam" aria-label="Камера">📷</button></div>
+      </div>
+      <div class="searchRow">
+        <input id="q" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Штрихкод или название товара">
+        <button id="qClear" aria-label="Очистить">×</button>
+        <div id="suggest"></div>
+      </div>
+      <div id="cart"></div>
+      <div class="foot">
+        <div class="totalRow"><span id="cnt">Позиций: 0</span><div id="total">0</div></div>
+        <div class="btns"><button class="btn sec" id="btnClear">Очистить</button><button class="btn primary" id="btnSell" disabled>ПРОДАТЬ</button></div>
+      </div>
+    </section>
+    <section class="tab" id="tab-session"><div class="pane" id="sessionPane"></div></section>
+    <section class="tab" id="tab-history"><div class="pane" id="historyPane"></div></section>
+  </main>
+  <nav>
+    <button data-tab="kassa" class="active"><b>🛒</b>Касса</button>
+    <button data-tab="session"><b>🧾</b>Сессия<span class="badge" id="badge" style="display:none">0</span></button>
+    <button data-tab="history"><b>🗂</b>История</button>
+  </nav>
+</div>
+<div id="toast"><span id="toastText"></span><button id="toastBtn" style="display:none"></button></div>
+<div class="ov" id="ov"><div class="sheet" id="sheet"></div></div>
+<input type="file" id="fileIn" accept=".xlsx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none">
+<script src="html5-qrcode.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "Резервная касса",
+  "short_name": "Касса",
+  "description": "Резервная касса на случай, когда не работает основная: цены по штрихкоду и учёт продаж",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "lang": "ru",
+  "background_color": "#0f766e",
+  "theme_color": "#0f766e",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

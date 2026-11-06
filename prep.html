@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Подготовка прайса</title>
+<style>
+:root{--bg:#f3f5f7;--card:#fff;--ink:#1b2430;--muted:#6b7785;--brand:#0f766e;--brand-d:#0b5a54;--line:#dfe5ea;--warn:#8a4b00;--warn-bg:#fff4d6;--bad:#b3261e;--bad-bg:#fde8e6;--ok:#1b5e20;--ok-bg:#e6f4ea;--info-bg:#e8f0fe;--info:#174ea6}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:18px 14px 60px}
+h1{font-size:22px;margin:6px 0 8px}
+.lead{margin:0 0 16px;color:#34414f}
+.drop{display:block;border:2px dashed #9fb3b0;border-radius:14px;background:#fff;text-align:center;padding:26px 12px;cursor:pointer}
+.drop:hover,.drop.over{border-color:var(--brand);background:#f1faf9}
+.drop .big{display:block;font-size:20px;font-weight:800;color:var(--brand)}
+.drop .small{display:block;color:var(--muted);font-size:14px;margin-top:4px}
+#f{position:absolute;left:-9999px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px}
+.card h2{font-size:17px;margin:0 0 6px}
+.card p{margin:6px 0}
+.card.warn{background:var(--warn-bg);border-color:#f0d58a;color:#3d2600}
+.card.bad{background:var(--bad-bg);border-color:#f4b9b4;color:#5f1410}
+.card.ok{background:var(--ok-bg);border-color:#b7dcbe;color:#14411a}
+.card.info{background:var(--info-bg);border-color:#c5d6f7;color:#13306b}
+.tiles{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.tile{flex:1 1 140px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.tile b{display:block;font-size:26px;line-height:1.15}
+.tile span{color:var(--muted);font-size:13px}
+.btns{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.btn{border:0;border-radius:12px;height:52px;padding:0 20px;font-size:17px;font-weight:700;cursor:pointer}
+.btn.primary{background:var(--brand);color:#fff}.btn.primary:hover{background:var(--brand-d)}
+.btn.sec{background:#e5eaee;color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:8px}
+td,th{border-bottom:1px solid rgba(0,0,0,.1);padding:5px 6px;text-align:left;vertical-align:top}
+th{font-weight:700;color:var(--muted);font-size:12.5px}
+.mono{font-family:ui-monospace,Consolas,monospace;white-space:nowrap}
+ol{padding-left:22px;margin:6px 0}
+li{margin:4px 0}
+.muted{color:var(--muted);font-size:14px}
+.scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Подготовка прайса для «Резервной кассы»</h1>
+  <p class="lead">Выберите файл, который вы выгрузили из учётной программы (Excel или CSV). Страница оставит только то, что нужно приложению: код, название, штрихкод, розничную цену и единицу измерения. Закупочные цены и остатки в готовый файл не попадут. Файл никуда не отправляется: всё происходит на этом устройстве.</p>
+
+  <label class="drop" id="drop" for="f"><span class="big">Выбрать файл</span><span class="small">Excel (.xlsx) или CSV. Можно перетащить файл сюда</span></label>
+  <input type="file" id="f" accept=".xlsx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+
+  <div id="out"></div>
+</div>
+
+<script>
+'use strict';
+/* ============ Резервная касса ============
+   Настройки (можно менять): */
+const CFG = {
+  SESSION_HOURS: 24,      // сессия закрывается автоматически через столько часов
+  KEEP_DAYS: 5,           // закрытые сессии хранятся столько дней
+  PRICE_URL_DEFAULT: 'prices.csv',
+  SYNC_EVERY_MIN: 30,     // как часто проверять новый прайс, пока приложение открыто
+  SYNC_TIMEOUT_MS: 15000, // если интернета нет, ждать не дольше
+  SCAN_REPEAT_MS: 1500,   // пауза против двойного чтения одного штрихкода
+  STALE_DAYS: 3,          // через сколько дней предупреждать, что прайс не обновлялся
+  VERSION: '1.1'
+};
+
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const r2 = x => Math.round((x + Number.EPSILON) * 100) / 100;
+const r3 = x => Math.round((x + Number.EPSILON) * 1000) / 1000;
+const nf0 = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+const nf2 = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const nf3 = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+const sp = s => s.replace(/[  ]/g, ' ');
+const money = x => { x = r2(x || 0); return sp((Number.isInteger(x) ? nf0 : nf2).format(x)); };
+const qtyText = (q, unit) => unit === 'кг' ? sp(nf3.format(q)) + ' кг' : sp(nf0.format(q)) + ' шт';
+const pad = n => String(n).padStart(2, '0');
+const fmtDT = ts => { const d = new Date(ts); return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+const fmtTime = ts => { const d = new Date(ts); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+const normText = s => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+const normBC = s => { s = String(s || '').trim().toUpperCase().replace(/\s+/g, ''); if (/^\d+$/.test(s)) s = s.replace(/^0+(?=\d)/, ''); return s; };
+const num = v => { const x = parseFloat(String(v || '').replace(/\s/g, '').replace(',', '.')); return isFinite(x) ? x : 0; };
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+/* ---------- хранилище (IndexedDB) ---------- */
+const DB = (() => {
+  let db;
+  const open = () => new Promise((res, rej) => {
+    const rq = indexedDB.open('kassa', 1);
+    rq.onupgradeneeded = () => {
+      const d = rq.result;
+      d.createObjectStore('kv');
+      d.createObjectStore('sessions', { keyPath: 'id' });
+      d.createObjectStore('sales', { keyPath: 'id' }).createIndex('sessionId', 'sessionId');
+    };
+    rq.onsuccess = () => { db = rq.result; res(); };
+    rq.onerror = () => rej(rq.error);
+  });
+  const run = (store, mode, fn) => new Promise((res, rej) => {
+    const t = db.transaction(store, mode); let out;
+    t.oncomplete = () => res(out);
+    t.onerror = t.onabort = () => rej(t.error);
+    const r = fn(t.objectStore(store));
+    if (r && 'onsuccess' in r) r.onsuccess = () => { out = r.result; };
+  });
+  return {
+    open,
+    get: (s, k) => run(s, 'readonly', o => o.get(k)),
+    all: s => run(s, 'readonly', o => o.getAll()),
+    bySession: id => run('sales', 'readonly', o => o.index('sessionId').getAll(id)),
+    put: (s, v, k) => run(s, 'readwrite', o => (k === undefined ? o.put(v) : o.put(v, k))),
+    del: (s, k) => run(s, 'readwrite', o => o.delete(k)),
+  };
+})();
+const kvGet = k => DB.get('kv', k);
+const kvSet = (k, v) => DB.put('kv', v, k);
+
+/* ---------- чтение файла прайса (CSV) ---------- */
+function decodeBuf(buf) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+  catch (e) { return new TextDecoder('windows-1251').decode(buf); }
+}
+function hashBuf(buf) {
+  const u = new Uint8Array(buf); let h = 2166136261;
+  for (let i = 0; i < u.length; i++) h = Math.imul(h ^ u[i], 16777619);
+  return (h >>> 0).toString(16) + ':' + u.length;
+}
+function parseCSV(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const nl = text.indexOf('\n');
+  const first = text.slice(0, nl > 0 ? nl : 3000);
+  const cnt = ch => first.split(ch).length - 1;
+  const delim = [';', '\t', ','].map(d => [d, cnt(d)]).sort((a, b) => b[1] - a[1])[0][0];
+  const rows = []; let row = [], f = '', q = false, qs = 0, i = 0;
+  const n = text.length;
+  while (i < n || q) {
+    if (q && i >= n) { q = false; f = '"'; i = qs; continue; }      // файл кончился внутри кавычек: значит, кавычка была обычным символом
+    const c = text[i];
+    if (q) {
+      if (c === '"') {
+        const nx = text[i + 1];
+        if (nx === '"') { f += '"'; i += 2; continue; }
+        if (nx === undefined || nx === delim || nx === '\n' || nx === '\r') q = false;   // закрывает поле только кавычка перед разделителем
+        else f += c;
+      }
+      else if (i - qs > 400) { q = false; f = '"'; i = qs; continue; }                  // слишком длинно для названия: кавычка была обычным символом
+      else f += c;
+    }
+    else if (c === '"' && f === '') { q = true; qs = i + 1; }       // кавычка открывает поле только в его начале (ХЛЕБ "БОРОДИНСКИЙ", 6" — это просто текст)
+    else if (c === delim) { row.push(f); f = ''; }
+    else if (c === '\n') { row.push(f); rows.push(row); row = []; f = ''; }
+    else if (c !== '\r') f += c;
+    i++;
+  }
+  if (f !== '' || row.length) { row.push(f); rows.push(row); }
+  return rows;
+}
+function parsePrice(v) {
+  let s = String(v == null ? '' : v).replace(/[\s ]/g, '');
+  if (!s) return null;
+  if (s.includes(',') && s.includes('.')) s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  else s = s.replace(',', '.');
+  const m = s.match(/^\d+(\.\d+)?/);
+  const x = m ? parseFloat(m[0]) : 0;
+  return x > 0 ? x : null;
+}
+
+const HDR = {
+  code: ['код', 'артикул', 'id', 'sku', 'кодтовара'],
+  name: ['наименование', 'название', 'номенклатура', 'товар', 'name', 'наименованиетовара'],
+  bc: ['штрихкод', 'штрихкоды', 'шк', 'barcode', 'ean', 'штрихкодтовара'],
+  price: ['розничнаяцена', 'ценапродажи', 'розничная', 'розница', 'ценарозничная', 'цена', 'price'],   // закупочные цены сюда не попадают
+  unit: ['единицаизмерения', 'единица', 'едизм', 'ед', 'unit'],
+  plu: ['plu', 'плу', 'кодвесов', 'номернавесах', 'номервесах'],
+  stock: ['количествоостаток', 'остаток', 'остатокнаскладе', 'количество']       // нужен только для проверки полноты выгрузки, в прайс не попадает
+};
+const hkey = s => String(s == null ? '' : s).toLowerCase().replace(/ё/g, 'е').replace(/[\s.\-_,]/g, '');
+
+/* Строка заголовка. У выгрузок из учётных программ шапка бывает в 2–3 строки (группа «Итого», ниже «Розничная цена», ещё ниже «Код», «Номенклатура»…) */
+function findHeader(rows) {
+  const scan = Math.min(rows.length, 25), keys = [];
+  for (let r = 0; r < scan; r++) keys.push((rows[r] || []).map(hkey));
+  const rank = (row, f) => { let b = null; for (let i = 0; i < row.length; i++) { const k = HDR[f].indexOf(row[i]); if (k >= 0 && (!b || k < b.k)) b = { i, k }; } return b; };
+  let bi = -1, bs = 0;
+  for (let r = 0; r < scan; r++) { let s = 0; for (const f of Object.keys(HDR)) if (rank(keys[r], f)) s++; if (s > bs) { bs = s; bi = r; } }
+  if (bi < 0) return null;
+  const col = {};
+  for (const f of Object.keys(HDR))
+    for (let r = bi; r >= Math.max(0, bi - 3); r--) { const x = rank(keys[r], f); if (x) { col[f] = x.i; break; } }
+  const above = keys.slice(Math.max(0, bi - 3), bi + 1).map(k => k.join('|')).join('|');
+  return { row: bi, col, hasCost: /закуп|себестоим|оптов/.test(above) };
+}
+
+/* Превращает строки файла в список товаров. Возвращает {products, report} или {error} */
+function buildCatalog(rows) {
+  if (!rows.length) return { error: 'Файл пустой' };
+  const h = findHeader(rows), col = h ? h.col : {};
+  if (!h || col.name == null || col.price == null) {
+    const first = rows.find(r => r.some(x => String(x).trim())) || [];
+    return { error: 'Не найдены столбцы «Наименование» и «Цена». В начале файла: ' + first.filter(x => String(x).trim()).slice(0, 8).join(' | ') };
+  }
+  const rep = { rows: 0, products: 0, barcodes: 0, noBarcode: 0, noPrice: 0, deleted: 0, skipped: 0, badBc: 0, badEx: [], conflicts: 0, conflictEx: [],
+    weighted: 0, plu: 0, pluConflicts: 0, hasCost: !!h.hasCost, stock: null, conflictList: [], badList: [], noBcList: [], noPriceList: [] };
+  const byKey = new Map(), products = [], owner = new Map();
+  const clean = v => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  for (let r = h.row + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.every(x => !String(x).trim())) continue;
+    rep.rows++;
+    const name = clean(row[col.name]);
+    const codeRaw = col.code != null ? clean(row[col.code]) : '';
+    if (!name || /^итого(\s|$)/i.test(name)) { rep.skipped++; continue; }     // итоговые и групповые строки («Организация», «Склад», «Итого»)
+    if (/^удалить(\s|$)/i.test(name)) { rep.deleted++; continue; }
+    const key = codeRaw ? 'c:' + codeRaw : 'n:' + normText(name);
+    let p = byKey.get(key);
+    if (!p) {
+      let price = parsePrice(row[col.price]);
+      if (price != null) price = Math.round(price * 100) / 100;
+      let unit = 'шт';
+      if (col.unit != null) unit = /^(кг|kg|килограмм)/i.test(clean(row[col.unit])) ? 'кг' : 'шт';
+      else if (/(^|\s)вес\s*$/i.test(name)) unit = 'кг';
+      p = { code: codeRaw, name, price, unit, bcs: [], plu: null, shared: [] };
+      if (col.plu != null) { const v = parseInt(String(row[col.plu] || '').replace(/\D/g, ''), 10); if (v > 0) p.plu = v; }
+      byKey.set(key, p); products.push(p);
+      if (price == null) { rep.noPrice++; rep.noPriceList.push(p); }
+      if (col.stock != null) {
+        const sx = String(row[col.stock] == null ? '' : row[col.stock]).replace(/[\s ]/g, '').replace(',', '.');
+        if (sx !== '' && isFinite(+sx)) { rep.stock = rep.stock || { pos: 0, zero: 0, neg: 0 }; if (+sx > 0) rep.stock.pos++; else if (+sx === 0) rep.stock.zero++; else rep.stock.neg++; }
+      }
+    }
+    const cell = col.bc != null ? String(row[col.bc] == null ? '' : row[col.bc]) : '';
+    const cellOne = cell.replace(/\s+/g, '');
+    for (let part of (/^\d+([.,]\d+)?e\+?\d+$/i.test(cellOne) ? [cellOne] : cell.split(/[;|,\n]+/))) {
+      part = part.trim().replace(/\s+/g, '');
+      if (!part) continue;
+      // не штрихкод: число в экспоненте, строчные буквы и знаки (куски кодов маркировки), цифр больше 14
+      if (/^\d+([.,]\d+)?e\+?\d+$/i.test(part) || !/^[0-9A-Z\-]{3,20}$/.test(part) || (/^\d+$/.test(part) && part.length > 14)) {
+        rep.badBc++; if (rep.badEx.length < 12) rep.badEx.push(part.slice(0, 26) + ': ' + p.name.slice(0, 28));
+        if (rep.badList.length < 3000) rep.badList.push({ code: p.code, name: p.name, value: part });
+        continue;
+      }
+      const nb = normBC(part), ow = owner.get(nb);
+      if (ow && ow !== p) {
+        if (!p.shared.includes(nb)) {
+          p.shared.push(nb); rep.conflicts++;
+          if (rep.conflictEx.length < 12) rep.conflictEx.push(part + ': «' + ow.name.slice(0, 28) + '» и «' + p.name.slice(0, 28) + '»');
+          if (rep.conflictList.length < 3000) rep.conflictList.push({ bc: part, a: ow, b: p });
+        }
+      } else if (!ow) { owner.set(nb, p); p.bcs.push(nb); }
+    }
+  }
+  const pluOwner = new Map();
+  for (const p of products) {
+    if (p.unit === 'кг') {
+      rep.weighted++;
+      // Номер товара на весах берём только из столбца PLU. Код из учётной программы и число в названии с ним НЕ совпадают: так можно продать не тот товар.
+      if (p.plu) { if (pluOwner.has(p.plu) && pluOwner.get(p.plu) !== p) { rep.pluConflicts++; p.plu = null; } else { pluOwner.set(p.plu, p); rep.plu++; } }
+    }
+    rep.barcodes += p.bcs.length;
+    if (!p.bcs.length && !p.shared.length) { rep.noBarcode++; if (rep.noBcList.length < 3000) rep.noBcList.push(p); }
+  }
+  rep.products = products.length;
+  return { products, report: rep };
+}
+/* Отчёт для хранения в телефоне: без длинных списков */
+function liteReport(rep) { const o = Object.assign({}, rep); delete o.conflictList; delete o.badList; delete o.noBcList; delete o.noPriceList; return o; }
+
+/* ---------- чтение Excel (.xlsx) без внешних библиотек ---------- */
+const isZip = buf => { const u = new Uint8Array(buf, 0, Math.min(4, buf.byteLength)); return u.length === 4 && u[0] === 0x50 && u[1] === 0x4B && u[2] === 3 && u[3] === 4; };
+async function inflateRaw(u8) {
+  if (typeof DecompressionStream !== 'function') throw new Error('Этот браузер не умеет читать файлы Excel. Сохраните файл как CSV или обновите Chrome.');
+  const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+function unzip(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), td = new TextDecoder();
+  let e = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('Файл Excel повреждён или скачан не полностью');
+  const n = dv.getUint16(e + 10, true); let p = dv.getUint32(e + 16, true);
+  const files = {};
+  for (let k = 0; k < n && dv.getUint32(p, true) === 0x02014b50; k++) {
+    const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    files[td.decode(u8.subarray(p + 46, p + 46 + nlen))] = { method: dv.getUint16(p + 10, true), csize: dv.getUint32(p + 20, true), off: dv.getUint32(p + 42, true) };
+    p += 46 + nlen + xlen + clen;
+  }
+  return {
+    names: Object.keys(files),
+    async read(name) {
+      const f = files[name]; if (!f) return null;
+      const start = f.off + 30 + dv.getUint16(f.off + 26, true) + dv.getUint16(f.off + 28, true), data = u8.subarray(start, start + f.csize);
+      if (f.method === 0) return data;
+      if (f.method === 8) return inflateRaw(data);
+      throw new Error('Неподдерживаемое сжатие внутри файла Excel');
+    }
+  };
+}
+async function xlsxSheets(buf) {
+  const z = unzip(buf), td = new TextDecoder('utf-8');
+  const xml = async n => {
+    const d = await z.read(n); if (!d) return null;
+    const doc = new DOMParser().parseFromString(td.decode(d), 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('Файл Excel повреждён');
+    return doc;
+  };
+  const ss = [], sx = await xml('xl/sharedStrings.xml');
+  if (sx) for (const si of sx.getElementsByTagName('si')) ss.push([...si.getElementsByTagName('t')].map(t => t.textContent).join(''));
+  const wb = await xml('xl/workbook.xml'), rels = await xml('xl/_rels/workbook.xml.rels'), relMap = {};
+  if (rels) for (const r of rels.getElementsByTagName('Relationship')) relMap[r.getAttribute('Id')] = r.getAttribute('Target');
+  const list = [];
+  if (wb) for (const s of wb.getElementsByTagName('sheet')) {
+    if (s.getAttribute('state') === 'hidden') continue;
+    const rid = s.getAttribute('r:id') || s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+    let t = relMap[rid]; if (!t) continue;
+    t = t.replace(/^\//, ''); if (!t.startsWith('xl/')) t = 'xl/' + t;
+    list.push({ name: s.getAttribute('name'), path: t });
+  }
+  if (!list.length) z.names.filter(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).forEach(n => list.push({ name: n, path: n }));
+  const out = [];
+  for (const sh of list) {
+    const doc = await xml(sh.path); if (!doc) continue;
+    const rows = [];
+    for (const row of doc.getElementsByTagName('row')) {
+      const ri = parseInt(row.getAttribute('r'), 10) - 1, cells = [];
+      let ci = 0;
+      for (const c of row.getElementsByTagName('c')) {
+        const ref = c.getAttribute('r'), m = ref && ref.match(/^([A-Z]+)/);
+        if (m) { let k = 0; for (const ch of m[1]) k = k * 26 + ch.charCodeAt(0) - 64; ci = k - 1; }
+        const t = c.getAttribute('t'); let v = '';
+        if (t === 'inlineStr') v = [...c.getElementsByTagName('t')].map(x => x.textContent).join('');
+        else { const ve = c.getElementsByTagName('v')[0]; v = ve ? ve.textContent : ''; if (t === 's') v = ss[+v] || ''; }
+        cells[ci++] = v;
+      }
+      rows[ri >= 0 ? ri : rows.length] = Array.from(cells, x => x == null ? '' : x);
+    }
+    for (let i = 0; i < rows.length; i++) if (!rows[i]) rows[i] = [];
+    out.push({ name: sh.name, rows });
+  }
+  return out;
+}
+/* Любой файл прайса (Excel, CSV): разобрать и построить каталог. Листы Excel перебираются, пока не найдётся нужный */
+async function buildCatalogFromBuffer(buf) {
+  const h4 = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+  if (h4[0] === 0xD0 && h4[1] === 0xCF && h4[2] === 0x11 && h4[3] === 0xE0)
+    return { error: 'Это старый формат Excel (.xls). Откройте файл в Excel и сохраните как «Книга Excel (.xlsx)» или «CSV UTF-8».' };
+  let tabs;
+  try { tabs = isZip(buf) ? await xlsxSheets(buf) : [{ name: 'CSV', rows: parseCSV(decodeBuf(buf)) }]; }
+  catch (e) { return { error: (e && e.message) || String(e) }; }
+  let last = null;
+  for (const t of tabs) {
+    let res = buildCatalog(t.rows);
+    // CSV, открытый в Excel без разбиения по столбцам и сохранённый как xlsx: вся строка лежит в первой ячейке. Разбираем её как CSV
+    if (res.error && t.name !== 'CSV' && t.rows.slice(0, 20).some(r => String(r[0] || '').split(/[;\t]/).length >= 3))
+      res = buildCatalog(parseCSV(t.rows.map(r => r.join(',').replace(/,+$/, '')).join('\n')));
+    if (!res.error) { res.sheet = t.name; return res; }
+    last = res;
+  }
+  return last || { error: 'В файле нет данных' };
+}
+
+/* ---------- чистый CSV для публикации и отчёт о проблемах ---------- */
+const csvCell = v => { v = String(v == null ? '' : v); return /[;"\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+function catalogToCsv(products) {
+  const out = ['Код;Наименование;Штрихкод;Цена;Ед.;PLU'];
+  for (const p of products) {
+    const price = p.price == null ? '' : String(p.price).replace('.', ',');
+    const bcs = [...p.bcs, ...(p.shared || [])];
+    for (const b of (bcs.length ? bcs : [''])) out.push([p.code, p.name, b, price, p.unit, p.plu || ''].map(csvCell).join(';'));
+  }
+  return '﻿' + out.join('\r\n') + '\r\n';
+}
+function problemsCsv(rep) {
+  const L = ['Проблема;Код;Наименование;Штрихкод;Что сделать'];
+  const add = (t, c, n, b, d) => L.push([t, c, n, b, d].map(csvCell).join(';'));
+  for (const c of rep.conflictList) for (const p of [c.a, c.b]) add('Один штрихкод у двух товаров', p.code, p.name, c.bc, 'Оставить штрихкод только у того товара, которому он принадлежит');
+  for (const b of rep.badList) add('Некорректный штрихкод', b.code, b.name, b.value, 'Удалить значение (похоже на код маркировки или ошибку ввода)');
+  for (const p of rep.noBcList) add('Нет штрихкода', p.code, p.name, '', p.unit === 'кг' ? 'Весовой товар: найдётся по этикетке с весов или по названию' : 'Добавить штрихкод, иначе товар найдётся только по названию');
+  for (const p of rep.noPriceList) add('Нет цены', p.code, p.name, '', 'Указать розничную цену');
+  return '﻿' + L.join('\r\n') + '\r\n';
+}
+
+</script>
+<script>
+(function () {
+  var out = document.getElementById('out'), drop = document.getElementById('drop'), fin = document.getElementById('f');
+  var nf = new Intl.NumberFormat('ru-RU');
+  var last = null;
+
+  function card(cls, title, html) { return '<div class="card ' + cls + '"><h2>' + esc(title) + '</h2>' + html + '</div>'; }
+  function tile(n, label) { return '<div class="tile"><b>' + nf.format(n) + '</b><span>' + esc(label) + '</span></div>'; }
+  function download(name, text) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+    a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  }
+  function table(head, rows) {
+    return '<div class="scroll"><table><tr>' + head.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr>'
+      + rows.map(function (r) { return '<tr>' + r.map(function (c, i) { return '<td' + (i === 0 ? ' class="mono"' : '') + '>' + esc(c) + '</td>'; }).join('') + '</tr>'; }).join('') + '</table></div>';
+  }
+
+  function render(res, fileName) {
+    var r = res.report, P = res.products, h = '';
+    // что получилось
+    h += '<div class="tiles">' + tile(r.products, 'товаров') + tile(r.barcodes, 'штрихкодов') + tile(r.weighted, 'весовых товаров') + '</div>';
+    if (res.sheet && res.sheet !== 'CSV') h += '<p class="muted">Прочитан лист «' + esc(res.sheet) + '».</p>';
+
+    // приватность
+    if (r.hasCost) h += card('info', 'В исходном файле есть закупочные цены',
+      '<p>В готовый <b>prices.csv</b> они не попали, там только розничные цены. Но <b>сам исходный файл нельзя выкладывать в интернет</b> (на GitHub и подобные сайты): по адресу его увидит любой.</p>');
+
+    // проблемы
+    var nProblems = 0;
+    if (r.noPrice) { nProblems++; h += card('bad', 'Товары без цены: ' + nf.format(r.noPrice), '<p>В чеке цену придётся вводить вручную. Лучше заполнить розничную цену в учётной программе.</p>'
+      + table(['Код', 'Название'], r.noPriceList.slice(0, 8).map(function (p) { return [p.code, p.name]; }))); }
+    if (r.conflicts) { nProblems++; h += card('warn', 'Один штрихкод у двух товаров: ' + nf.format(r.conflicts),
+      '<p>Приложение не угадывает: при сканировании такого штрихкода оно покажет оба товара, и кассир выберет нужный. Чтобы выбора не было, оставьте штрихкод только у того товара, которому он принадлежит.</p>'
+      + table(['Штрихкод', 'Товар 1', 'Товар 2'], r.conflictList.slice(0, 8).map(function (c) { return [c.bc, c.a.name, c.b.name]; }))
+      + (r.conflicts > 8 ? '<p class="muted">Показаны первые 8. Полный список в файле проблем (кнопка ниже).</p>' : '')); }
+    if (r.badBc) { nProblems++; h += card('warn', 'Значения, не похожие на штрихкод: ' + nf.format(r.badBc),
+      '<p>Это обрывки кодов маркировки, ссылки, лишние символы. В прайс они не взяты, товары при этом сохранены.</p>'
+      + table(['Значение', 'Товар'], r.badList.slice(0, 8).map(function (b) { return [b.value, b.name]; }))); }
+    if (r.noBarcode) {
+      nProblems++;
+      var wN = r.noBcList.filter(function (p) { return p.unit === 'кг'; }).length, oN = r.noBarcode - wN;
+      h += card('info', 'Товары без штрихкода: ' + nf.format(r.noBarcode),
+        '<p>Весовых: ' + nf.format(wN) + ' (они находятся по этикетке с весов или по названию), остальных: ' + nf.format(oN) + ' (только поиск по названию).</p>'
+        + (oN ? table(['Код', 'Название'], r.noBcList.filter(function (p) { return p.unit !== 'кг'; }).slice(0, 8).map(function (p) { return [p.code, p.name]; })) : ''));
+    }
+    if (r.weighted && !r.plu) h += card('info', 'Номера товаров на весах не указаны',
+      '<p>В файле нет столбца с номером товара на весах (PLU). Приложение запомнит их само: в первый раз наведите камеру на этикетку с весов, выберите товар по названию и нажмите «Запомнить». Дальше этикетка распознаётся сама.</p>');
+    if (r.stock && !r.stock.zero && r.products > 100) { nProblems++; h += card('warn', 'В выгрузке нет товаров с нулевым остатком',
+      '<p>Товаров с остатком: ' + nf.format(r.stock.pos) + (r.stock.neg ? ', с минусовым остатком: ' + nf.format(r.stock.neg) : '') + ', с нулевым: 0. Похоже, в отчёт попали только товары, которые числятся на складе. Товара, которого сейчас нет в наличии, не будет и в прайсе, и при сканировании приложение скажет «нет в прайсе». Выгрузите весь ассортимент (прайс-лист или справочник номенклатуры) либо включите вывод нулевых остатков, если в отчёте есть такая настройка.</p>'); }
+    var seen = {}, dupN = [];
+    P.forEach(function (p) { var k = normText(p.name); if (seen[k] && seen[k] !== p) dupN.push([seen[k].code + ' и ' + p.code, p.name]); else seen[k] = p; });
+    if (dupN.length) h += card('info', 'Одинаковое название у разных товаров: ' + nf.format(dupN.length), '<p>Это не ошибка, но кассиру трудно отличить такие товары в списке.</p>' + table(['Коды', 'Название'], dupN.slice(0, 6)));
+    if (!nProblems) h += card('ok', 'Серьёзных проблем не найдено', '<p>Файл можно использовать как есть.</p>');
+
+    // что делать дальше
+    h += '<div class="btns"><button class="btn primary" id="dl">Скачать prices.csv</button>'
+      + (nProblems ? '<button class="btn sec" id="dlp">Скачать список проблем (CSV)</button>' : '') + '</div>';
+    h += card('', 'Что дальше', '<ol><li>Скачайте <b>prices.csv</b>.</li><li>На GitHub откройте репозиторий приложения: <b>Add file → Upload files</b>, перетащите <b>prices.csv</b> (старый файл с тем же именем будет заменён) → <b>Commit changes</b>.</li><li>Через 1–2 минуты на телефоне: <b>⚙ → Обновить прайс</b>. Откройте <b>«Последняя загрузка»</b> и сверьте число товаров с этой страницей.</li></ol>');
+    out.innerHTML = h;
+    last = { csv: catalogToCsv(P), problems: problemsCsv(r) };
+    document.getElementById('dl').onclick = function () { download('prices.csv', last.csv); };
+    var dp = document.getElementById('dlp'); if (dp) dp.onclick = function () { download('problemy_v_prayse.csv', last.problems); };
+  }
+
+  async function handle(file) {
+    if (!file) return;
+    out.innerHTML = '<div class="card"><p>Читаю файл «' + esc(file.name) + '»…</p></div>';
+    try {
+      var res = await buildCatalogFromBuffer(await file.arrayBuffer());
+      if (res.error) throw new Error(res.error);
+      render(res, file.name);
+    } catch (e) {
+      out.innerHTML = card('bad', 'Не удалось прочитать файл', '<p>' + esc(e && e.message || e) + '</p>');
+    }
+  }
+  fin.addEventListener('change', function () { var f = fin.files[0]; fin.value = ''; handle(f); });
+  ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+  drop.addEventListener('drop', function (e) { handle(e.dataTransfer.files[0]); });
+})();
+</script>
+</body>
+</html>
