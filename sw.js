@@ -1,6 +1,6 @@
 /* Резервная касса: офлайн-оболочка.
-   Если меняете файлы приложения, поменяйте номер ниже (kassa-v4 -> kassa-v5), и телефоны обновятся. */
-const CACHE = 'kassa-v4';
+   Если меняете файлы приложения, поменяйте номер ниже (kassa-v5 -> kassa-v6), и телефоны обновятся. */
+const CACHE = 'kassa-v5';
 const SHELL = ['./', 'index.html', 'app.js', 'prep.html', 'html5-qrcode.min.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

@@ -9,7 +9,9 @@ const CFG = {
   SYNC_TIMEOUT_MS: 15000, // если интернета нет, ждать не дольше
   SCAN_REPEAT_MS: 1500,   // пауза против двойного чтения одного штрихкода
   STALE_DAYS: 3,          // через сколько дней предупреждать, что прайс не обновлялся
-  VERSION: '1.3'
+  CAM_WAIT_MS: 8000,      // сколько ждать ответа камеры, потом показать подсказку и кнопку «Включить камеру» (попытка при этом остаётся в фоне)
+  DB_WAIT_MS: 4000,       // сколько ждать ответа хранилища телефона при запуске, потом пробовать ещё раз
+  VERSION: '1.3.1'
 };
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -1228,26 +1230,41 @@ function repFound(text) {
 
 /* Камера в этой вкладке: отдельное окно, после первого прочитанного штрихкода закрывается само */
 let repScanner = null, repScanBusy = false;
-const repCamMsg = t => { const m = $('#camMsg2'); if (m) m.textContent = t || ''; };
+const repCamMsg = (t, retry) => { const m = $('#camMsg2'); if (!m) return; if (retry) m.innerHTML = esc(t) + ' <button class="camBtn" id="camRetry2">Повторить</button>'; else m.textContent = t || ''; };
 function startRepScan() {
   return camRun(async () => {
     if (repScanner || !$('#reader2')) return;
     if (!window.Html5Qrcode) { repCamMsg('Сканер не загрузился. Введите штрихкод вручную.'); return; }
-    repCamMsg('Запуск камеры…');
-    const F = Html5QrcodeSupportedFormats;
-    const sc = new Html5Qrcode('reader2', { formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.ITF], useBarCodeDetectorIfSupported: true, verbose: false });
-    try {
-      await sc.start({ facingMode: 'environment' }, { fps: 10, disableFlip: true, qrbox: (w, h) => ({ width: Math.max(50, Math.floor(w * 0.92)), height: Math.max(50, Math.floor(h * 0.6)) }) }, onRepScan, () => { });
-      repScanner = sc; repCamMsg('');
-    } catch (e) { try { sc.clear(); } catch (x) { } repCamMsg(camError(e)); }
+    const id = ++rcSeq;
+    if (rcDirty) { rcDirty = false; const o = $('#reader2'); if (o) { const n = document.createElement('div'); n.id = 'reader2'; o.replaceWith(n); } }
+    repCamMsg('Запуск камеры…'); camLog('отчёты: запрос камеры №' + id);
+    let sc; try { sc = mkScanner('reader2'); } catch (e) { camLog('отчёты: сканер не создан: ' + errName(e)); repCamMsg('Сканер не запустился. Ввод вручную работает.', true); return; }
+    const g = camGo(sc, { fps: 10, disableFlip: true, qrbox: (w, h) => ({ width: Math.max(50, Math.floor(w * 0.92)), height: Math.max(50, Math.floor(h * 0.6)) }) }, text => { if (id === rcSeq) onRepScan(text); });
+    const r = await g.race;
+    const wanted = () => id === rcSeq && !repScanner && !!$('#reader2');
+    if (r === 'ok') {
+      if (wanted()) { repScanner = sc; repCamMsg(''); camLog('отчёты: камера включена'); watchPlay(); }
+      else { camLog('отчёты: камера включилась, но уже не нужна'); await camStop(sc); }
+    } else if (r === 'slow') {
+      rcDirty = true; camLog('отчёты: камера не ответила за ' + Math.round(CFG.CAM_WAIT_MS / 1000) + ' с (№' + id + ')');
+      if (wanted()) repCamMsg('Камера ещё не ответила. Если iPhone спрашивает разрешение, нажмите «Разрешить».', true);
+      g.p.then(() => camRun(async () => {
+        if (wanted()) { repScanner = sc; repCamMsg(''); camLog('отчёты: камера ответила позже (№' + id + ')'); watchPlay(); }
+        else { camLog('отчёты: поздний ответ №' + id + ' не нужен'); await camStop(sc); }
+      }), e => camRun(async () => { camLog('отчёты: ошибка позже (№' + id + '): ' + errName(e)); if (wanted()) repCamMsg(camError(e), true); }));
+    } else {
+      try { sc.clear(); } catch (x) { }
+      camLog('отчёты: ошибка (№' + id + '): ' + errName(r.e));
+      repCamMsg(camError(r.e), true);
+    }
   });
 }
 function stopRepScan() {
+  rcSeq++;                                   // незавершённые попытки включения больше не нужны
   return camRun(async () => {
     if (!repScanner) return;
     const sc = repScanner; repScanner = null;
-    try { await sc.stop(); } catch (e) { }
-    try { sc.clear(); } catch (e) { }
+    await camStop(sc);
   });
 }
 function onRepScan(text) {
@@ -1333,11 +1350,53 @@ async function keepAwake() { try { if (navigator.wakeLock && !document.hidden) w
 
 /* ---------- камера ---------- */
 let scanner = null, torchFeat = null, torchOn = false, camQ = Promise.resolve();
-const camMsg = t => { $('#camMsg').textContent = t || ''; };
-const camRun = fn => (camQ = camQ.then(fn).catch(() => { }));     // включение и выключение камеры идут строго по очереди
-window.addEventListener('unhandledrejection', e => {              // библиотека сканера при мгновенном выключении камеры сообщает о прерванном play(): это не ошибка
-  if (/play\(\) request was interrupted|media was removed/i.test(String(e.reason && (e.reason.message || e.reason)))) e.preventDefault();
+let camSeq = 0, rcSeq = 0, camDirty = false, rcDirty = false;      // номера попыток включить камеру: ответ от устаревшей попытки камеру уже не включает
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const camLogLines = [];                                            // последние события камеры: их видно в ⚙ → «Диагностика камеры»
+function camLog(t) { const d = new Date(); camLogLines.push(pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + ' ' + t); if (camLogLines.length > 40) camLogLines.shift(); }
+const errName = e => String((e && e.name ? e.name + ' ' : '') + (e && (e.message || e) || '')).slice(0, 120);
+const camMsg = (t, retry) => { const m = $('#camMsg'); if (retry) m.innerHTML = '<span>' + esc(t) + '</span><button class="camBtn" id="camRetry">Включить камеру</button>'; else m.textContent = t || ''; };
+const camRun = fn => (camQ = camQ.then(fn).catch(e => { camLog('камера: сбой ' + errName(e)); }));     // включение и выключение камеры идут строго по очереди
+/* Создание сканера. Встроенный распознаватель Safari (BarcodeDetector) на iPhone закрыт флагом, а в iOS 18 даже с флагом не работает; при включённом флаге библиотека может упасть уже при создании сканера.
+   Поэтому на iPhone берём распознаватель самой библиотеки, а при любой ошибке пробуем ещё раз без встроенного. Раньше такая ошибка гасла молча, и оставалось «Запуск камеры…». */
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function mkScanner(nodeId) {
+  const F = Html5QrcodeSupportedFormats, formats = [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.ITF];     // без QR: коды маркировки и платёжные QR не нужны
+  try { return new Html5Qrcode(nodeId, { formatsToSupport: formats, useBarCodeDetectorIfSupported: !isIOS, verbose: false }); }
+  catch (e) { camLog('сканер: встроенный распознаватель не подошёл (' + errName(e) + '), беру запасной'); return new Html5Qrcode(nodeId, { formatsToSupport: formats, useBarCodeDetectorIfSupported: false, verbose: false }); }
+}
+/* Выключение не должно держать очередь: если сканер не ответил за 3 секунды, идём дальше */
+const camStop = async sc => { try { await Promise.race([sc.stop(), wait(3000)]); } catch (e) { } try { sc.clear(); } catch (e) { } };
+/* Запуск с «сторожем». Если камера не ответила за CFG.CAM_WAIT_MS (iPhone ждёт разрешения или завис), очередь освобождается, а сама попытка остаётся в фоне:
+   ответит камера позже и она ещё нужна — подхватим, не нужна — выключим. Раньше очередь ждала ответа бесконечно, и всё вставало на «Запуск камеры…». */
+function camGo(sc, cfg, onCode) {
+  let p; try { p = sc.start({ facingMode: 'environment' }, cfg, onCode, () => { }); } catch (e) { p = Promise.reject(e); }
+  return { p, race: Promise.race([p.then(() => 'ok', e => ({ e })), wait(CFG.CAM_WAIT_MS).then(() => 'slow')]) };
+}
+/* Если видео не запускается само (бывает на iPhone), просим нажать на изображение камеры: нажатие разрешает воспроизведение */
+function needTap() {
+  const rep = !!$('#reader2'), box = rep ? $('#reader2') : $('#camWrap'), v = $(rep ? '#reader2 video' : '#reader video'), say = t => (rep ? repCamMsg(t) : camMsg(t));
+  if (!box || !v || !v.paused) return;
+  camLog('видео стоит, жду нажатия');
+  say('Нажмите на изображение камеры, чтобы запустить его.');
+  box.addEventListener('click', () => { v.play().then(() => say(''), () => { }); }, { once: true });
+}
+const watchPlay = () => setTimeout(needTap, 2500);
+window.addEventListener('unhandledrejection', e => {
+  const r = e.reason, m = String(r && (r.message || r) || '');
+  if (/play\(\) request was interrupted|media was removed/i.test(m)) { e.preventDefault(); return; }    // библиотека сканера при мгновенном выключении камеры сообщает о прерванном play(): это не ошибка
+  if (r && r.name === 'NotAllowedError' && /play|user agent|platform|interact/i.test(m) && document.querySelector('#reader video, #reader2 video')) { e.preventDefault(); needTap(); }
 });
+/* Сведения для ⚙ → «Диагностика камеры»: по ним видно, на каком шаге остановка */
+async function camDiag() {
+  const ua = navigator.userAgent || '';
+  const mode = (navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) ? 'значок на экране' : 'вкладка браузера';
+  let perm = '—';
+  try { if (navigator.permissions && navigator.permissions.query) { const q = await Promise.race([navigator.permissions.query({ name: 'camera' }), wait(400).then(() => null)]); if (q) perm = ({ granted: 'разрешена', denied: 'запрещена', prompt: 'спросит' })[q.state] || q.state; } } catch (e) { }
+  return ['Версия ' + CFG.VERSION, 'Открыто как: ' + mode, 'Защищённый адрес (https): ' + (window.isSecureContext ? 'да' : 'нет'),
+    'Камера в браузере: ' + (navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? 'есть' : 'нет'), 'Разрешение на камеру: ' + perm, 'Устройство: ' + ua.slice(0, 160), ''
+  ].concat(camLogLines.length ? camLogLines : ['(событий камеры пока нет)']).join('\n');
+}
 function onScan(text) {
   if (sheetOpen()) return;
   const now = Date.now();
@@ -1353,36 +1412,48 @@ function camError(e) {
   if (!window.isSecureContext) return 'Камера работает только на защищённом адресе (https).';
   return 'Камера не запустилась. Нажмите 📷, чтобы повторить. Ввод вручную работает.';
 }
-function startScanner() {
+function adoptScanner(sc) {
+  scanner = sc; S.scanning = true; camMsg('');
+  try { torchFeat = sc.getRunningTrackCameraCapabilities().torchFeature(); } catch (e) { torchFeat = null; }
+  $('#btnTorch').style.display = torchFeat && torchFeat.isSupported() ? '' : 'none';
+  torchOn = false; $('#btnTorch').classList.remove('on');
+  watchPlay();
+}
+function startScanner(user) {                  // user: запуск по нажатию кнопки; тогда «свёрнутость» не проверяем (нажать можно, только если приложение на экране; iPhone иногда ошибочно считает его скрытым)
   return camRun(async () => {
-    if (scanner || S.camOff || S.tab !== 'kassa' || document.hidden) return;
+    if (scanner || S.camOff || S.tab !== 'kassa' || (document.hidden && !user)) return;
     if (!window.Html5Qrcode) { camMsg('Сканер не загрузился. Введите штрихкод вручную.'); return; }
-    camMsg('Запуск камеры…');
-    const F = Html5QrcodeSupportedFormats;
-    const sc = new Html5Qrcode('reader', {
-      formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.ITF],     // без QR: коды маркировки и платёжные QR не нужны
-      useBarCodeDetectorIfSupported: true, verbose: false
-    });
-    try {
-      await sc.start({ facingMode: 'environment' },
-        { fps: 10, disableFlip: true, qrbox: (w, h) => ({ width: Math.floor(w * 0.92), height: Math.floor(Math.max(70, h * 0.6)) }) },
-        onScan, () => { });
-      scanner = sc; S.scanning = true; camMsg('');
-      try { torchFeat = sc.getRunningTrackCameraCapabilities().torchFeature(); } catch (e) { torchFeat = null; }
-      $('#btnTorch').style.display = torchFeat && torchFeat.isSupported() ? '' : 'none';
-      torchOn = false; $('#btnTorch').classList.remove('on');
-    } catch (e) {
+    const id = ++camSeq;
+    if (camDirty) { camDirty = false; const o = $('#reader'); if (o) { const n = document.createElement('div'); n.id = 'reader'; o.replaceWith(n); } }   // прежняя попытка ещё висит: новой даём чистое место
+    camMsg('Запуск камеры…'); camLog('касса: запрос камеры №' + id);
+    let sc; try { sc = mkScanner('reader'); } catch (e) { camLog('касса: сканер не создан: ' + errName(e)); camMsg('Сканер не запустился. Ввод вручную работает.', true); return; }
+    const g = camGo(sc, { fps: 10, disableFlip: true, qrbox: (w, h) => ({ width: Math.max(50, Math.floor(w * 0.92)), height: Math.max(70, Math.floor(h * 0.6)) }) }, text => { if (id === camSeq) onScan(text); });   // не меньше 50 px: если видео ещё не имеет размера, сканер не должен падать
+    const r = await g.race;
+    const wanted = () => id === camSeq && !scanner && !S.camOff && S.tab === 'kassa';          // свернули приложение или ушли с вкладки: stopScanner() уже сменил номер попытки
+    if (r === 'ok') {
+      if (wanted()) { camLog('касса: камера включена'); adoptScanner(sc); }
+      else { camLog('касса: камера включилась, но уже не нужна'); await camStop(sc); }
+    } else if (r === 'slow') {
+      camDirty = true; camLog('касса: камера не ответила за ' + Math.round(CFG.CAM_WAIT_MS / 1000) + ' с (№' + id + ')');
+      if (wanted()) camMsg('Камера ещё не ответила. Если iPhone спрашивает разрешение, нажмите «Разрешить». Ввод вручную работает.', true);
+      g.p.then(() => camRun(async () => {
+        if (wanted()) { camLog('касса: камера ответила позже (№' + id + ')'); adoptScanner(sc); }
+        else { camLog('касса: поздний ответ №' + id + ' не нужен'); await camStop(sc); }
+      }), e => camRun(async () => { camLog('касса: ошибка позже (№' + id + '): ' + errName(e)); if (wanted()) camMsg(camError(e), true); }));
+    } else {
       try { sc.clear(); } catch (x) { }
-      camMsg(camError(e));
+      camLog('касса: ошибка (№' + id + '): ' + errName(r.e));
+      camMsg(camError(r.e), true);
     }
   });
 }
 function stopScanner() {
+  camSeq++;                                  // незавершённые попытки включения больше не нужны: когда камера ответит, она выключится сама
   return camRun(async () => {
     if (!scanner) return;
     const sc = scanner; scanner = null; S.scanning = false; torchFeat = null; $('#btnTorch').style.display = 'none';
-    try { await sc.stop(); } catch (e) { }
-    try { sc.clear(); } catch (e) { }
+    camLog('касса: камера выключена');
+    await camStop(sc);
   });
 }
 $('#btnTorch').addEventListener('click', async () => {
@@ -1391,7 +1462,12 @@ $('#btnTorch').addEventListener('click', async () => {
 });
 $('#btnCam').addEventListener('click', async () => {
   if (S.scanning) { S.camOff = true; await stopScanner(); camMsg('Камера выключена. Нажмите 📷, чтобы включить.'); }
-  else { S.camOff = false; startScanner(); }
+  else { S.camOff = false; startScanner(true); }
+});
+
+document.addEventListener('click', e => {                         // кнопки «Включить камеру» и «Повторить» в сообщениях камеры
+  if (e.target.closest('#camRetry')) { S.camOff = false; camLog('касса: повтор по нажатию'); startScanner(true); }
+  else if (e.target.closest('#camRetry2')) { camLog('отчёты: повтор по нажатию'); startRepScan(); }
 });
 
 /* ---------- вкладки ---------- */
@@ -1460,6 +1536,7 @@ const extraText = () => {
 async function openSettings() {
   const m = CAT.meta || {}, url = (await kvGet('priceUrl')) || '';
   let persisted = '—'; try { persisted = (await navigator.storage.persisted()) ? 'да' : 'нет'; } catch (e) { }
+  const diag = await camDiag();
   openSheet(`<h2>Настройки</h2>
     ${isDemoCatalog() ? `<p style="background:#fff3cd;color:#4a3300;border-radius:8px;padding:8px 10px;margin:0 0 8px;font-size:13px">Сейчас в приложении учебный прайс из ${CAT.products.length} товаров, а не ваш. Положите выгрузку из 1С на сайт приложения под именем prices.xlsx (приложение подхватит её само) или загрузите файл вручную кнопкой ниже.</p>` : ''}
     <div class="kv"><span>Товаров в прайсе</span><span>${nf0.format(CAT.products.length)}</span></div>
@@ -1477,6 +1554,7 @@ async function openSettings() {
     <div class="btns"><a class="btn sec lnk" href="prep.html" target="_blank" rel="noopener">Сделать prices.csv (закупочные цены и остатки по желанию)</a></div>
     ${m.report ? `<h3 style="margin:14px 0 6px">Последняя загрузка</h3><pre class="rep">${esc(repText(m.report) + extraText())}</pre>` : ''}
     ${PLUMAP.size ? `<h3 style="margin:14px 0 6px">Номера с весов, которые вы запомнили</h3>` + [...PLUMAP].map(([plu, key]) => { const p = CAT.byKey.get(key); return `<div class="kv"><span>№ ${plu}: ${p ? esc(p.name) : 'товара больше нет в прайсе'}</span><button class="xbtn" data-plu="${plu}" aria-label="Забыть">✕</button></div>`; }).join('') : ''}
+    <h3 style="margin:14px 0 6px">Диагностика камеры</h3><pre class="rep" id="camDiag">${esc(diag)}</pre>
     <div class="btns"><button class="btn sec" id="shNo">Закрыть</button></div>`);
   $('#shNo').onclick = closeSheet;
   $$('#sheet .xbtn').forEach(b => b.onclick = () => { PLUMAP.delete(+b.dataset.plu); savePluMap(); toast('Номер ' + b.dataset.plu + ' забыт'); openSettings(); });
@@ -1505,14 +1583,29 @@ $('#btnSettings').addEventListener('click', openSettings);
 $('#priceChip').addEventListener('click', openSettings);
 
 /* ---------- запуск ---------- */
+/* Хранилище телефона (IndexedDB) на iPhone иногда не отвечает при запуске: пробуем ещё раз, а не висим молча */
+async function openDB() {
+  for (let i = 1; i <= 3; i++) {
+    const r = await Promise.race([DB.open().then(() => 'ok', e => ({ e })), wait(CFG.DB_WAIT_MS).then(() => 'slow')]);
+    if (r === 'ok') return;
+    if (r !== 'slow') throw r.e;
+    camLog('запуск: хранилище не ответило (попытка ' + i + ')');
+  }
+  throw new Error('хранилище телефона не отвечает. Закройте приложение и откройте снова');
+}
 async function init() {
-  await DB.open();
+  camLog('запуск: открываю хранилище'); await openDB(); camLog('запуск: хранилище открыто');
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) { }
   await loadExtra(); await loadEdits(); await loadCatalogFromDB(); await loadPluMap();
   const d = await kvGet('draft'); if (Array.isArray(d)) S.lines = d;
   await autoCloseSessions(); await cleanupOld();
   renderChip(); renderCart(); await updateBadge();
-  showTab('kassa'); keepAwake();
+  camLog('запуск: данные загружены'); showTab('kassa'); keepAwake();
+  setTimeout(() => {                                         // страховка: если камера сама не стартовала (iPhone считает приложение «свёрнутым»), даём кнопку
+    if (scanner || camSeq > 0 || S.camOff || S.tab !== 'kassa') return;
+    camLog('касса: камера не стартовала сама' + (document.hidden ? ' (приложение считается свёрнутым)' : ''));
+    if (document.hidden) camMsg('Камера не включилась. Нажмите «Включить камеру».', true); else startScanner();
+  }, 2500);
   if (navigator.onLine !== false) doSync(false);
   setInterval(() => { tick(); renderChip(); }, 30000);
   setInterval(() => { if (navigator.onLine) doSync(false); }, CFG.SYNC_EVERY_MIN * 60000);

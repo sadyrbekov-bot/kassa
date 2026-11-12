@@ -33,6 +33,8 @@ nav button.active{color:var(--brand);font-weight:700}
 #reader video{width:100%!important;height:100%!important;object-fit:cover}
 #camMsg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cfd8dc;padding:12px;font-size:14px}
 #camMsg:empty{display:none}
+#camMsg{flex-direction:column;gap:10px}
+.camBtn{border:0;border-radius:10px;background:var(--brand);color:#fff;font-size:15px;font-weight:700;padding:10px 16px;margin-top:4px}
 #camTools{position:absolute;right:8px;bottom:8px;display:flex;gap:8px;z-index:3}
 #camTools button{background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:10px;height:40px;min-width:44px;font-size:18px}
 #camTools button.on{background:#ffd54f;color:#000}
@@ -168,7 +170,7 @@ pre.rep{white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace;background:#f3
     <section class="tab active" id="tab-kassa">
       <div id="camWrap">
         <div id="reader"></div>
-        <div id="camMsg">Запуск камеры…</div>
+        <div id="camMsg">Запуск…</div>
         <div id="camTools"><button id="btnTorch" style="display:none" aria-label="Фонарик">🔦</button><button id="btnCam" aria-label="Камера">📷</button></div>
       </div>
       <div class="searchRow">
