@@ -40,12 +40,14 @@ ol{padding-left:22px;margin:6px 0}
 li{margin:4px 0}
 .muted{color:var(--muted);font-size:14px}
 .scroll{overflow-x:auto}
+.chk{display:flex;gap:10px;align-items:flex-start;margin-top:10px;font-weight:600;cursor:pointer}
+.chk input{width:22px;height:22px;flex:none;margin:1px 0 0}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Подготовка прайса для «Резервной кассы»</h1>
-  <p class="lead">Выберите файл, который вы выгрузили из учётной программы (Excel или CSV). Страница оставит только то, что нужно приложению: код, название, штрихкод, розничную цену и единицу измерения. Закупочные цены и остатки в готовый файл не попадут. Файл никуда не отправляется: всё происходит на этом устройстве.</p>
+  <p class="lead">Выберите файл, который вы выгрузили из учётной программы (Excel или CSV). Страница оставит только то, что нужно приложению: код, название, штрихкод, розничную цену и единицу измерения. Закупочные цены и остатки в готовый файл не попадут, если не поставить галочки: они нужны только для отчётов в приложении (себестоимость и остаток). Файл никуда не отправляется: всё происходит на этом устройстве.</p>
 
   <label class="drop" id="drop" for="f"><span class="big">Выбрать файл</span><span class="small">Excel (.xlsx) или CSV. Можно перетащить файл сюда</span></label>
   <input type="file" id="f" accept=".xlsx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
@@ -58,14 +60,14 @@ li{margin:4px 0}
 /* ============ Резервная касса ============
    Настройки (можно менять): */
 const CFG = {
-  SESSION_HOURS: 24,      // сессия закрывается автоматически через столько часов
-  KEEP_DAYS: 5,           // закрытые сессии хранятся столько дней
-  PRICE_URL_DEFAULT: 'prices.csv',
+  CLOSE_HOUR: 23, CLOSE_MIN: 59,   // сессия закрывается автоматически каждый день в это время (23:59 по часам телефона)
+  KEEP_DAYS: 90,          // закрытые сессии и их продажи хранятся столько дней (отчёты за период берут данные отсюда)
+  PRICE_URLS: ['prices.xlsx', 'prices.csv'],   // что скачивать рядом с приложением, если свой адрес не задан: сначала выгрузка Excel как есть, затем CSV
   SYNC_EVERY_MIN: 30,     // как часто проверять новый прайс, пока приложение открыто
   SYNC_TIMEOUT_MS: 15000, // если интернета нет, ждать не дольше
   SCAN_REPEAT_MS: 1500,   // пауза против двойного чтения одного штрихкода
   STALE_DAYS: 3,          // через сколько дней предупреждать, что прайс не обновлялся
-  VERSION: '1.1'
+  VERSION: '1.3'
 };
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -181,6 +183,8 @@ const HDR = {
   stock: ['количествоостаток', 'остаток', 'остатокнаскладе', 'количество']       // нужен только для проверки полноты выгрузки, в прайс не попадает
 };
 const hkey = s => String(s == null ? '' : s).toLowerCase().replace(/ё/g, 'е').replace(/[\s.\-_,]/g, '');
+/* Закупочная цена за единицу (для отчёта по себестоимости). Искать её надо так же, как остальные столбцы, но в выборе строки заголовка она не участвует. Раньше в списке — важнее */
+const HDR_COST = ['закупочнаяцена', 'ценазакупки', 'закупочная', 'закупка', 'закупцена', 'себестоимость', 'ценапоставщика', 'приходнаяцена', 'входящаяцена'];
 
 /* Строка заголовка. У выгрузок из учётных программ шапка бывает в 2–3 строки (группа «Итого», ниже «Розничная цена», ещё ниже «Код», «Номенклатура»…) */
 function findHeader(rows) {
@@ -193,6 +197,10 @@ function findHeader(rows) {
   const col = {};
   for (const f of Object.keys(HDR))
     for (let r = bi; r >= Math.max(0, bi - 3); r--) { const x = rank(keys[r], f); if (x) { col[f] = x.i; break; } }
+  for (let r = bi; r >= Math.max(0, bi - 3); r--) {
+    let b = null; for (let i = 0; i < keys[r].length; i++) { const k = HDR_COST.indexOf(keys[r][i]); if (k >= 0 && (!b || k < b.k)) b = { i, k }; }
+    if (b) { col.cost = b.i; break; }
+  }
   const above = keys.slice(Math.max(0, bi - 3), bi + 1).map(k => k.join('|')).join('|');
   return { row: bi, col, hasCost: /закуп|себестоим|оптов/.test(above) };
 }
@@ -206,7 +214,7 @@ function buildCatalog(rows) {
     return { error: 'Не найдены столбцы «Наименование» и «Цена». В начале файла: ' + first.filter(x => String(x).trim()).slice(0, 8).join(' | ') };
   }
   const rep = { rows: 0, products: 0, barcodes: 0, noBarcode: 0, noPrice: 0, deleted: 0, skipped: 0, badBc: 0, badEx: [], conflicts: 0, conflictEx: [],
-    weighted: 0, plu: 0, pluConflicts: 0, hasCost: !!h.hasCost, stock: null, conflictList: [], badList: [], noBcList: [], noPriceList: [] };
+    weighted: 0, plu: 0, pluConflicts: 0, hasCost: !!h.hasCost, costCol: col.cost != null, costN: 0, stockN: 0, stock: null, conflictList: [], badList: [], noBcList: [], noPriceList: [] };
   const byKey = new Map(), products = [], owner = new Map();
   const clean = v => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
   for (let r = h.row + 1; r < rows.length; r++) {
@@ -225,13 +233,14 @@ function buildCatalog(rows) {
       let unit = 'шт';
       if (col.unit != null) unit = /^(кг|kg|килограмм)/i.test(clean(row[col.unit])) ? 'кг' : 'шт';
       else if (/(^|\s)вес\s*$/i.test(name)) unit = 'кг';
-      p = { code: codeRaw, name, price, unit, bcs: [], plu: null, shared: [] };
+      p = { code: codeRaw, name, price, unit, bcs: [], plu: null, shared: [], cost: null, stock: null };
       if (col.plu != null) { const v = parseInt(String(row[col.plu] || '').replace(/\D/g, ''), 10); if (v > 0) p.plu = v; }
+      if (col.cost != null) { const cv = parsePrice(row[col.cost]); if (cv != null) { p.cost = Math.round(cv * 10000) / 10000; rep.costN++; } }
       byKey.set(key, p); products.push(p);
       if (price == null) { rep.noPrice++; rep.noPriceList.push(p); }
       if (col.stock != null) {
         const sx = String(row[col.stock] == null ? '' : row[col.stock]).replace(/[\s ]/g, '').replace(',', '.');
-        if (sx !== '' && isFinite(+sx)) { rep.stock = rep.stock || { pos: 0, zero: 0, neg: 0 }; if (+sx > 0) rep.stock.pos++; else if (+sx === 0) rep.stock.zero++; else rep.stock.neg++; }
+        if (sx !== '' && isFinite(+sx)) { p.stock = Math.round(+sx * 1000) / 1000; rep.stockN++; rep.stock = rep.stock || { pos: 0, zero: 0, neg: 0 }; if (+sx > 0) rep.stock.pos++; else if (+sx === 0) rep.stock.zero++; else rep.stock.neg++; }
       }
     }
     const cell = col.bc != null ? String(row[col.bc] == null ? '' : row[col.bc]) : '';
@@ -301,16 +310,62 @@ function unzip(buf) {
     }
   };
 }
-async function xlsxSheets(buf) {
+/* Разбор разметки листа без DOM. Выгрузки из учётных программ «тяжёлые» (сотни байт разметки на ячейку): DOMParser на таком файле
+   занимает десятки секунд на телефоне и очень много памяти. Результат тот же, что у разбора через DOM (это проверяют тесты) */
+const xmlDec = s => s.indexOf('&') < 0 ? s : s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (m, e) => {
+  if (e === 'amp') return '&'; if (e === 'lt') return '<'; if (e === 'gt') return '>'; if (e === 'quot') return '"'; if (e === 'apos') return "'";
+  try { return String.fromCodePoint(e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10)); } catch (_) { return ''; }
+});
+function xmlTexts(s) {      // весь текст из <t>…</t> внутри фрагмента (в том числе из частей «форматированного текста»)
+  let out = '', m; const re = /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g;
+  while ((m = re.exec(s))) out += m[1];
+  return xmlDec(out);
+}
+function fastShared(txt) {
+  const out = [], re = /<si\b[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g; let m;
+  while ((m = re.exec(txt))) out.push(m[1] ? xmlTexts(m[1]) : '');
+  return out;
+}
+function fastRows(txt, ss) {
+  const rows = [], rowRe = /<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g, cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  let rm, found = 0;
+  while ((rm = rowRe.exec(txt))) {
+    found++;
+    const rn = /(?:^|\s)r="(\d+)"/.exec(rm[1]), ri = rn ? parseInt(rn[1], 10) - 1 : -1, cells = [], body = rm[2];
+    if (body) {
+      let cm, ci = 0; cellRe.lastIndex = 0;
+      while ((cm = cellRe.exec(body))) {
+        const cr = /(?:^|\s)r="([A-Z]+)\d*"/.exec(cm[1]);
+        if (cr) { let k = 0; for (let q = 0; q < cr[1].length; q++) k = k * 26 + cr[1].charCodeAt(q) - 64; ci = k - 1; }
+        const ct = /(?:^|\s)t="([^"]*)"/.exec(cm[1]), t = ct ? ct[1] : '', cb = cm[2];
+        let v = '';
+        if (cb) {
+          if (t === 'inlineStr') v = xmlTexts(cb);
+          else { const vm = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(cb); v = vm ? xmlDec(vm[1]) : ''; if (t === 's') v = ss[+v] || ''; }
+        }
+        cells[ci++] = v;
+      }
+    }
+    rows[ri >= 0 ? ri : rows.length] = Array.from(cells, x => x == null ? '' : x);
+  }
+  for (let i = 0; i < rows.length; i++) if (!rows[i]) rows[i] = [];
+  // страховка: число найденных строк должно совпасть с числом тегов <row>, иначе разбор через DOM
+  let tags = 0, ix = -1;
+  while ((ix = txt.indexOf('<row', ix + 1)) >= 0) { const ch = txt.charCodeAt(ix + 4); if (ch === 32 || ch === 62 || ch === 47 || ch === 10 || ch === 13 || ch === 9) tags++; }
+  return tags === found ? rows : null;
+}
+async function xlsxSheets(buf, viaDom) {
   const z = unzip(buf), td = new TextDecoder('utf-8');
+  const text = async n => { const d = await z.read(n); return d ? td.decode(d) : null; };
   const xml = async n => {
-    const d = await z.read(n); if (!d) return null;
-    const doc = new DOMParser().parseFromString(td.decode(d), 'application/xml');
+    const s = await text(n); if (s == null) return null;
+    const doc = new DOMParser().parseFromString(s, 'application/xml');
     if (doc.getElementsByTagName('parsererror').length) throw new Error('Файл Excel повреждён');
     return doc;
   };
-  const ss = [], sx = await xml('xl/sharedStrings.xml');
-  if (sx) for (const si of sx.getElementsByTagName('si')) ss.push([...si.getElementsByTagName('t')].map(t => t.textContent).join(''));
+  let ss = [];
+  if (viaDom) { const sx = await xml('xl/sharedStrings.xml'); if (sx) for (const si of sx.getElementsByTagName('si')) ss.push([...si.getElementsByTagName('t')].map(t => t.textContent).join('')); }
+  else { const s = await text('xl/sharedStrings.xml'); if (s) ss = fastShared(s); }
   const wb = await xml('xl/workbook.xml'), rels = await xml('xl/_rels/workbook.xml.rels'), relMap = {};
   if (rels) for (const r of rels.getElementsByTagName('Relationship')) relMap[r.getAttribute('Id')] = r.getAttribute('Target');
   const list = [];
@@ -324,22 +379,26 @@ async function xlsxSheets(buf) {
   if (!list.length) z.names.filter(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).forEach(n => list.push({ name: n, path: n }));
   const out = [];
   for (const sh of list) {
-    const doc = await xml(sh.path); if (!doc) continue;
-    const rows = [];
-    for (const row of doc.getElementsByTagName('row')) {
-      const ri = parseInt(row.getAttribute('r'), 10) - 1, cells = [];
-      let ci = 0;
-      for (const c of row.getElementsByTagName('c')) {
-        const ref = c.getAttribute('r'), m = ref && ref.match(/^([A-Z]+)/);
-        if (m) { let k = 0; for (const ch of m[1]) k = k * 26 + ch.charCodeAt(0) - 64; ci = k - 1; }
-        const t = c.getAttribute('t'); let v = '';
-        if (t === 'inlineStr') v = [...c.getElementsByTagName('t')].map(x => x.textContent).join('');
-        else { const ve = c.getElementsByTagName('v')[0]; v = ve ? ve.textContent : ''; if (t === 's') v = ss[+v] || ''; }
-        cells[ci++] = v;
+    let rows = null;
+    if (!viaDom) { const s = await text(sh.path); if (s == null) continue; rows = fastRows(s, ss); }
+    if (!rows) {      // разбор через DOM (запасной путь и эталон для тестов)
+      const doc = await xml(sh.path); if (!doc) continue;
+      rows = [];
+      for (const row of doc.getElementsByTagName('row')) {
+        const ri = parseInt(row.getAttribute('r'), 10) - 1, cells = [];
+        let ci = 0;
+        for (const c of row.getElementsByTagName('c')) {
+          const ref = c.getAttribute('r'), m = ref && ref.match(/^([A-Z]+)/);
+          if (m) { let k = 0; for (const ch of m[1]) k = k * 26 + ch.charCodeAt(0) - 64; ci = k - 1; }
+          const t = c.getAttribute('t'); let v = '';
+          if (t === 'inlineStr') v = [...c.getElementsByTagName('t')].map(x => x.textContent).join('');
+          else { const ve = c.getElementsByTagName('v')[0]; v = ve ? ve.textContent : ''; if (t === 's') v = ss[+v] || ''; }
+          cells[ci++] = v;
+        }
+        rows[ri >= 0 ? ri : rows.length] = Array.from(cells, x => x == null ? '' : x);
       }
-      rows[ri >= 0 ? ri : rows.length] = Array.from(cells, x => x == null ? '' : x);
+      for (let i = 0; i < rows.length; i++) if (!rows[i]) rows[i] = [];
     }
-    for (let i = 0; i < rows.length; i++) if (!rows[i]) rows[i] = [];
     out.push({ name: sh.name, rows });
   }
   return out;
@@ -366,12 +425,14 @@ async function buildCatalogFromBuffer(buf) {
 
 /* ---------- чистый CSV для публикации и отчёт о проблемах ---------- */
 const csvCell = v => { v = String(v == null ? '' : v); return /[;"\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-function catalogToCsv(products) {
-  const out = ['Код;Наименование;Штрихкод;Цена;Ед.;PLU'];
+function catalogToCsv(products, withCost, withStock) {      // withCost: добавить столбец «Закупка», withStock: столбец «Остаток» (для отчётов в приложении). Без них файл такой же, как раньше
+  const out = ['Код;Наименование;Штрихкод;Цена;Ед.;PLU' + (withCost ? ';Закупка' : '') + (withStock ? ';Остаток' : '')];
   for (const p of products) {
     const price = p.price == null ? '' : String(p.price).replace('.', ',');
+    const cost = p.cost == null ? '' : String(p.cost).replace('.', ',');
+    const stock = p.stock == null ? '' : String(p.stock).replace('.', ',');
     const bcs = [...p.bcs, ...(p.shared || [])];
-    for (const b of (bcs.length ? bcs : [''])) out.push([p.code, p.name, b, price, p.unit, p.plu || ''].map(csvCell).join(';'));
+    for (const b of (bcs.length ? bcs : [''])) out.push([p.code, p.name, b, price, p.unit, p.plu || ''].concat(withCost ? [cost] : [], withStock ? [stock] : []).map(csvCell).join(';'));
   }
   return '﻿' + out.join('\r\n') + '\r\n';
 }
@@ -412,8 +473,9 @@ function problemsCsv(rep) {
     if (res.sheet && res.sheet !== 'CSV') h += '<p class="muted">Прочитан лист «' + esc(res.sheet) + '».</p>';
 
     // приватность
-    if (r.hasCost) h += card('info', 'В исходном файле есть закупочные цены',
-      '<p>В готовый <b>prices.csv</b> они не попали, там только розничные цены. Но <b>сам исходный файл нельзя выкладывать в интернет</b> (на GitHub и подобные сайты): по адресу его увидит любой.</p>');
+    if (r.hasCost || r.costN || r.stockN) h += card('info', 'В исходном файле есть ' + (r.stockN && (r.costN || r.hasCost) ? 'закупочные цены и остатки' : r.stockN ? 'остатки' : 'закупочные цены'),
+      '<p id="costInfo"></p>' + (r.costN ? '<label class="chk"><input type="checkbox" id="wc"><span>Добавить закупочные цены в prices.csv (нужны для отчёта по себестоимости; найдены у ' + nf.format(r.costN) + ' товаров)</span></label>' : '')
+      + (r.stockN ? '<label class="chk"><input type="checkbox" id="ws"><span>Добавить остатки в prices.csv (нужны для столбца «Остаток» в отчёте; найдены у ' + nf.format(r.stockN) + ' товаров)</span></label>' : ''));
 
     // проблемы
     var nProblems = 0;
@@ -447,8 +509,18 @@ function problemsCsv(rep) {
       + (nProblems ? '<button class="btn sec" id="dlp">Скачать список проблем (CSV)</button>' : '') + '</div>';
     h += card('', 'Что дальше', '<ol><li>Скачайте <b>prices.csv</b>.</li><li>На GitHub откройте репозиторий приложения: <b>Add file → Upload files</b>, перетащите <b>prices.csv</b> (старый файл с тем же именем будет заменён) → <b>Commit changes</b>.</li><li>Через 1–2 минуты на телефоне: <b>⚙ → Обновить прайс</b>. Откройте <b>«Последняя загрузка»</b> и сверьте число товаров с этой страницей.</li></ol>');
     out.innerHTML = h;
-    last = { csv: catalogToCsv(P), problems: problemsCsv(r) };
-    document.getElementById('dl').onclick = function () { download('prices.csv', last.csv); };
+    last = { problems: problemsCsv(r) };
+    var wc = document.getElementById('wc'), ws = document.getElementById('ws'), dl = document.getElementById('dl');
+    function costNote() {
+      var on = [wc && wc.checked ? 'закупочные цены' : '', ws && ws.checked ? 'остатки' : ''].filter(Boolean);
+      var all = [r.costN || r.hasCost ? 'закупочные цены' : '', r.stockN ? 'остатки' : ''].filter(Boolean), ci = document.getElementById('costInfo');
+      if (ci) ci.innerHTML = on.length
+        ? 'Выбранное (' + on.join(' и ') + ') <b>будет в prices.csv</b>. Когда файл лежит на GitHub, это увидит любой, у кого есть адрес сайта: включайте, только если вас это устраивает. <b>Сам исходный файл по-прежнему нельзя выкладывать в интернет.</b>'
+        : 'В готовый <b>prices.csv</b> ' + all.join(' и ') + ' не попали, там только розничные цены. Но <b>сам исходный файл нельзя выкладывать в интернет</b> (на GitHub и подобные сайты): по адресу его увидит любой.';
+      dl.textContent = on.length ? 'Скачать prices.csv (с ' + [wc && wc.checked ? 'закупочными ценами' : '', ws && ws.checked ? 'остатками' : ''].filter(Boolean).join(' и ') + ')' : 'Скачать prices.csv';
+    }
+    costNote(); if (wc) wc.onchange = costNote; if (ws) ws.onchange = costNote;
+    dl.onclick = function () { download('prices.csv', catalogToCsv(P, !!(wc && wc.checked), !!(ws && ws.checked))); };
     var dp = document.getElementById('dlp'); if (dp) dp.onclick = function () { download('problemy_v_prayse.csv', last.problems); };
   }
 

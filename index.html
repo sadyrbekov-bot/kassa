@@ -99,6 +99,41 @@ table.sum tr.tot td{border-bottom:0;font-size:17px;font-weight:800;padding-top:1
 .sale li{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-top:1px dashed var(--line)}
 .sale li span:first-child{flex:1}
 .hist{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:8px;font-size:15px;color:var(--ink)}
+/* отчёты */
+.chips{display:flex;gap:5px;overflow-x:auto;margin-bottom:8px}
+.chips button{flex:1 1 auto;border:1px solid var(--line);background:#fff;border-radius:18px;padding:8px 4px;font-size:13.5px;color:var(--ink);white-space:nowrap}
+.chips button.active{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:700}
+.dates{display:flex;gap:8px;margin-bottom:8px}
+.dates label{flex:1;font-size:12px;color:var(--muted)}
+.dates input{display:block;width:100%;height:44px;margin-top:2px;font-size:16px;border:2px solid var(--line);border-radius:10px;padding:0 8px;background:#fff;color:var(--ink)}
+.rngTxt{margin:0 2px 8px;font-size:13px;color:var(--muted)}
+.rngTxt:empty{display:none}
+table.rpt{width:100%;border-collapse:collapse;font-size:13px}
+table.rpt th{text-align:right;font-size:11.5px;font-weight:700;color:var(--muted);padding:6px 3px;border-bottom:2px solid var(--line);vertical-align:bottom}
+table.rpt th:first-child,table.rpt td:first-child{text-align:left}
+table.rpt td{padding:7px 3px;border-bottom:1px solid var(--line);vertical-align:top;text-align:right;white-space:nowrap}
+table.rpt td:first-child{white-space:normal}
+table.rpt tr.tot td{border-bottom:0;padding-top:10px;font-size:14px;font-weight:800}
+table.rpt1 td{padding:10px 3px;font-size:16px}
+table.rpt1 td:last-child{font-size:20px;font-weight:800}
+table.rpt1 tr:last-child td{border-bottom:0}
+.rpt .na{color:var(--muted);font-weight:400}
+table.rpt2 th:not(:first-child),table.rpt2 td:not(:first-child){width:1%}
+.scrollx{overflow-x:auto;margin:0 -3px}
+.gSearch{display:flex;gap:8px}
+.gSearch input{flex:1;min-width:0;height:48px;font-size:17px;padding:0 12px;border:2px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+.gSearch input:focus{outline:none;border-color:var(--brand)}
+.gcam{flex:none;width:56px;height:48px;border:0;border-radius:10px;background:var(--brand);color:#fff;font-size:22px}
+table.rpt2 tbody tr{cursor:pointer}
+table.rpt2 tbody tr:active{background:#eef6f5}
+table.rpt td.neg{color:var(--danger)}
+#reader2{width:100%;height:240px;background:#000;border-radius:12px;overflow:hidden;margin:8px 0 4px}
+#reader2 video{width:100%!important;height:100%!important;object-fit:cover}
+@media (max-width:380px){
+table.rpt2{font-size:12px}
+table.rpt2 th{font-size:10.5px;padding:6px 1.5px}
+table.rpt2 td{padding:7px 1.5px}
+}
 /* оверлеи */
 #toast{position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + 56px);background:#263238;box-shadow:0 6px 20px rgba(0,0,0,.35);color:#fff;border-radius:12px;padding:12px 14px;display:none;z-index:60;align-items:center;gap:10px;font-size:15px}
 #toast.show{display:flex}#toast span{flex:1}
@@ -149,11 +184,13 @@ pre.rep{white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace;background:#f3
     </section>
     <section class="tab" id="tab-session"><div class="pane" id="sessionPane"></div></section>
     <section class="tab" id="tab-history"><div class="pane" id="historyPane"></div></section>
+    <section class="tab" id="tab-reports"><div class="pane" id="reportsPane"></div></section>
   </main>
   <nav>
     <button data-tab="kassa" class="active"><b>🛒</b>Касса</button>
     <button data-tab="session"><b>🧾</b>Сессия<span class="badge" id="badge" style="display:none">0</span></button>
     <button data-tab="history"><b>🗂</b>История</button>
+    <button data-tab="reports"><b>📊</b>Отчёты</button>
   </nav>
 </div>
 <div id="toast"><span id="toastText"></span><button id="toastBtn" style="display:none"></button></div>
